@@ -1,48 +1,52 @@
 FROM spack/ubuntu-jammy:0.23.0
 
 ARG DATA_FILE=files.txt
-
 ENV DATA_FILE=${DATA_FILE}
 
-RUN apt-get update
-RUN apt-get -y upgrade
-RUN apt-get -y remove cmake
-RUN apt-get -y install software-properties-common
-RUN add-apt-repository universe
-RUN apt-get update && apt-get -y install wget
+# Set up environment variables
+ENV INPUT_DATA_DIR=/projects/e3sm/inputdata \
+    USER=ghciocitester \
+    TZ=America/Eastern \
+    LANGUAGE=en_US:en \
+    LANG=en_US.UTF-8 \
+    BASE_URL=https://web.lcrc.anl.gov/public/e3sm/inputdata
 
-RUN apt-get -y autoremove
+# Install required packages, clean up after
+RUN apt-get update && \
+    apt-get -y upgrade && \
+    apt-get -y remove cmake && \
+    apt-get -y install software-properties-common wget && \
+    add-apt-repository universe && \
+    apt-get update && \
+    apt-get -y autoremove && \
+    rm -rf /var/lib/apt/lists/*
 
-ENV INPUT_DATA_DIR=/projects/e3sm/inputdata
-RUN mkdir -p $INPUT_DATA_DIR
+# Set git user info
+RUN git config --global user.email "${USER}@${USER}.${USER}" && \
+    git config --global user.name "${USER}"
 
-ENV USER=ghciocitester
+# Create input data directory
+RUN mkdir -p $INPUT_DATA_DIR /app
 
-RUN git config --global user.email "${USER}@${USER}.${USER}"
-RUN git config --global user.name "${USER}"
-
-ARG DEBIAN_FRONTEND=noninteractive
-ENV TZ=America/Los_Angeles
-
-ENV LANGUAGE=en_US:en \
-    LANG=en_US.UTF-8
-
-RUN mkdir -p /app/ \
-&& (echo "" \
-&&  echo "cat /app/files.txt | while read -r line; do" \
-&&  echo "    file_url=\$line" \
-&&  echo "    file_loc=\${line//https\:\/\/web\.lcrc\.anl\.gov\/public\/e3sm\/inputdata/${INPUT_DATA_DIR}}" \
-&&  echo "    mkdir -p \$( dirname -- \"\$file_loc\")" \
-&&  echo "    touch \"\$file_loc\"" \
-&&  echo "    echo \"downloading from \$file_url\"" \
-&&  echo "    echo \"downloading to \$file_loc\"" \
-&&  echo "    wget -q -O \"\$file_loc\" \"\$file_url\"" \
-&&  echo "done" \
-&&  echo "") > /app/download.sh
+# Build download script
+RUN cat > /app/download.sh <<'EOF'
+#!/bin/bash
+set -e
+while read -r relative_path; do
+    file_url="${BASE_URL}/${relative_path}"
+    file_loc="${INPUT_DATA_DIR}/${relative_path}"
+    mkdir -p "$(dirname "$file_loc")"
+    echo "Downloading $file_url -> $file_loc"
+    wget -q -O "$file_loc" "$file_url"
+done < /app/files.txt
+EOF
 
 RUN chmod +x /app/download.sh
 
+# Copy file list
 COPY ${DATA_FILE} /app/files.txt
+
+# Run download script
 RUN /app/download.sh
 
 ENTRYPOINT ["/bin/bash", "--rcfile", "/etc/profile", "-l"]
